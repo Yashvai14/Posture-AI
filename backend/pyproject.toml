@@ -1,0 +1,29 @@
+[project]
+name = "postureai-backend"
+version = "2.0.0"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = [
+    "model: uses the real MediaPipe pose model (needs models/pose_landmarker_full.task)",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning:google.protobuf.*",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = ["alembic/versions"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S", "SIM"]
+ignore = [
+    "B008",  # FastAPI dependencies in argument defaults are idiomatic
+    "S101",  # assert is fine in tests
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S105", "S106", "S311"]

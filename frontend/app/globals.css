@@ -1,0 +1,38 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-neutral-light text-neutral-dark antialiased;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+}
+
+/* Glassmorphism scroll effects */
+.glass-nav {
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid rgba(229, 231, 235, 0.5);
+}
+
+/* Custom premium buttons */
+.btn-primary {
+  @apply bg-primary hover:bg-primary-hover text-white font-medium px-6 py-3 rounded-lg shadow-soft transition-all duration-300 transform active:scale-95;
+}
+
+.btn-secondary {
+  @apply bg-white hover:bg-neutral-light border border-neutral-border text-neutral-dark font-medium px-6 py-3 rounded-lg shadow-soft transition-all duration-300 transform active:scale-95;
+}
+
+.btn-teal {
+  @apply bg-secondary hover:bg-secondary-hover text-white font-medium px-6 py-3 rounded-lg shadow-soft transition-all duration-300 transform active:scale-95;
+}
+
+/* Leaflet maps custom height and visibility styling */
+.leaflet-container {
+  width: 100%;
+  height: 100%;
+  border-radius: 1rem;
+}

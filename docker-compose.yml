@@ -1,0 +1,64 @@
+services:
+  db:
+    image: postgis/postgis:16-3.4-alpine
+    container_name: postureai-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: postureai
+      POSTGRES_USER: postureai
+      POSTGRES_PASSWORD: postureai_secure_password_123
+    ports:
+      - "${DB_PORT:-5433}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postureai -d postureai"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: postureai-backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg://postureai:postureai_secure_password_123@db:5432/postureai
+      SECRET_KEY: ${SECRET_KEY:-postureai_super_secret_production_key_random_32_chars_long}
+      ENVIRONMENT: development
+      LOG_LEVEL: INFO
+      CORS_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
+      OLLAMA_ENABLED: "false"
+      OLLAMA_URL: http://host.docker.internal:11434
+      STORAGE_DIR: /app/storage
+      POSE_MODEL_PATH: /app/models/pose_landmarker_full.task
+    ports:
+      - "${BACKEND_PORT:-8001}:8000"
+    volumes:
+      - backend_storage:/app/storage
+      - backend_uploads:/app/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:${BACKEND_PORT:-8001}/api
+    container_name: postureai-frontend
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
+  backend_storage:
+  backend_uploads:

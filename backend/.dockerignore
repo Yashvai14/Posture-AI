@@ -1,0 +1,16 @@
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.ruff_cache
+.git
+.gitignore
+*.db
+postureai.db
+storage/*
+!storage/.gitkeep
+uploads/*
+!uploads/.gitkeep
+tests
