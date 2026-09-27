@@ -7,8 +7,10 @@ from typing import Any
 from geoalchemy2 import Geography
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     Computed,
+    Date,
     DateTime,
     Enum,
     Float,
@@ -135,6 +137,8 @@ class PatientProfile(Base):
     sex: Mapped[str | None] = mapped_column(String(20))
     height_cm: Mapped[Decimal | None] = mapped_column(Numeric(5, 1))
     weight_kg: Mapped[Decimal | None] = mapped_column(Numeric(5, 1))
+    occupation: Mapped[str | None] = mapped_column(String(50))
+    preferred_language: Mapped[str] = mapped_column(String(10), default="en", server_default="en")
     updated_at: Mapped[datetime] = _updated_at()
 
     user: Mapped[User] = relationship(back_populates="profile")
@@ -212,6 +216,8 @@ class PatientSnapshot(Base):
     height_cm: Mapped[Decimal | None] = mapped_column(Numeric(5, 1))
     weight_kg: Mapped[Decimal | None] = mapped_column(Numeric(5, 1))
     symptoms: Mapped[str | None] = mapped_column(Text)
+    occupation: Mapped[str | None] = mapped_column(String(50))
+    preferred_language: Mapped[str | None] = mapped_column(String(10), default="en", server_default="en")
     created_at: Mapped[datetime] = _created_at()
 
     analysis: Mapped[PostureAnalysis] = relationship(back_populates="snapshot")
@@ -442,3 +448,64 @@ class AuditLog(Base):
     ip_address: Mapped[str | None] = mapped_column(String(45))
     details: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
     created_at: Mapped[datetime] = _created_at()
+
+
+# ---------------------------------------------------------------- posture programs & check-ins
+
+
+class DailyCheckin(Base):
+    __tablename__ = "daily_checkins"
+    __table_args__ = (
+        Index("ix_daily_checkins_user_date", "user_id", "checkin_date", unique=True),
+        CheckConstraint("neck_discomfort BETWEEN 1 AND 10", name="neck_discomfort_range"),
+        CheckConstraint("shoulder_discomfort BETWEEN 1 AND 10", name="shoulder_discomfort_range"),
+        CheckConstraint("back_discomfort BETWEEN 1 AND 10", name="back_discomfort_range"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    checkin_date: Mapped[date] = mapped_column(Date, default=date.today)
+    neck_discomfort: Mapped[int] = mapped_column(SmallInteger)
+    shoulder_discomfort: Mapped[int] = mapped_column(SmallInteger)
+    back_discomfort: Mapped[int] = mapped_column(SmallInteger)
+    exercises_completed: Mapped[str] = mapped_column(String(20))  # "yes", "partially", "no"
+    notes: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = _created_at()
+
+    user: Mapped[User] = relationship()
+
+
+class ExerciseLibraryItem(Base):
+    __tablename__ = "exercise_library"
+
+    id: Mapped[str] = mapped_column(String(60), primary_key=True)
+    name: Mapped[str] = mapped_column(String(150))
+    category: Mapped[str] = mapped_column(String(50))  # mobility | stretch | strength | awareness
+    description: Mapped[str] = mapped_column(Text)
+    instructions: Mapped[str] = mapped_column(Text)
+    target_area: Mapped[str] = mapped_column(String(100))
+    difficulty: Mapped[str] = mapped_column(String(30))  # beginner | intermediate | advanced
+    duration: Mapped[str] = mapped_column(String(50))
+    repetitions: Mapped[str] = mapped_column(String(80))
+    frequency: Mapped[str] = mapped_column(String(80))
+    safety_notes: Mapped[str] = mapped_column(Text)
+    target_findings: Mapped[list[str]] = mapped_column(ARRAY(String(50)), server_default="{}")
+
+
+class PostureProgram(Base):
+    __tablename__ = "posture_programs"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    analysis_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("posture_analyses.id", ondelete="SET NULL"))
+    occupation: Mapped[str | None] = mapped_column(String(50))
+    preferred_language: Mapped[str] = mapped_column(String(10), default="en")
+    title: Mapped[str] = mapped_column(String(150))
+    weeks_data: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    completed_days: Mapped[list[str]] = mapped_column(ARRAY(String(20)), server_default="{}")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
+    created_at: Mapped[datetime] = _created_at()
+    updated_at: Mapped[datetime] = _updated_at()
+
+    user: Mapped[User] = relationship()
+

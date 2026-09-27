@@ -9,7 +9,7 @@ from app.db.session import get_db
 from app.models.models import AnalysisStatus, PostureAnalysis, PostureReport, User
 from app.repositories import repository as repo
 from app.routers.analysis import PRIVATE_FILE_HEADERS, get_owned_analysis
-from app.routers.deps import get_current_user
+from app.routers.deps import get_current_user, get_current_user_with_query_token
 from app.services import analysis_service, audit
 from app.services.storage import get_storage
 
@@ -44,7 +44,7 @@ def download_report(
 def download_report_legacy(
     report_id: uuid.UUID,
     request: Request,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user_with_query_token),
     db: Session = Depends(get_db),
 ) -> FileResponse:
     report = db.get(PostureReport, report_id)

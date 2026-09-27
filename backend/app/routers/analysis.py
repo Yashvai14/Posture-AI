@@ -16,7 +16,15 @@ from app.db.session import get_db
 from app.models.models import AnalysisStatus, PostureAnalysis, User
 from app.repositories import repository as repo
 from app.routers.deps import get_current_user
-from app.schemas.schemas import AnalysisCreate, AnalysisOut, AnalysisPage, AnalysisSummaryOut, ProgressOut
+from app.schemas.schemas import (
+    AnalysisCreate,
+    AnalysisOut,
+    AnalysisPage,
+    AnalysisSummaryOut,
+    ComparisonOut,
+    ProgressOut,
+    WeeklySummaryOut,
+)
 from app.services import analysis_service, audit
 from app.services.image_validation import read_limited, validate_image
 from app.services.storage import get_storage
@@ -175,6 +183,24 @@ def progress(user: User = Depends(get_current_user), db: Session = Depends(get_d
     return analysis_service.progress_for_user(db, user.id)
 
 
+@router.get("/analyses/compare", response_model=ComparisonOut)
+def compare_analyses(
+    baseline_id: uuid.UUID = Query(...),
+    current_id: uuid.UUID = Query(...),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> ComparisonOut:
+    return analysis_service.compare_analyses(db, user.id, baseline_id, current_id)
+
+
+@router.get("/analyses/weekly-summary", response_model=WeeklySummaryOut)
+def weekly_summary(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> WeeklySummaryOut:
+    return analysis_service.generate_weekly_summary(db, user.id)
+
+
 def build_legacy_analysis_dict(analysis: PostureAnalysis, db: Session) -> dict:
     db.refresh(analysis)
     metrics_dict = {
@@ -230,13 +256,29 @@ def build_legacy_analysis_dict(analysis: PostureAnalysis, db: Session) -> dict:
 
     report_id = str(analysis.report.id) if analysis.report else str(analysis.id)
 
+    iq_score = 0.90
+    conf_score = round(float(analysis.alignment_score or 85.0) / 100.0, 2)
+    analysis_scope = "full_body"
+    limitations = []
+    if analysis.quality_checks:
+        for qc in analysis.quality_checks:
+            if qc.get("code") == "quality_scores" and "scores" in qc:
+                iq_score = round(qc["scores"].get("overall_quality", 90) / 100.0, 2)
+            elif qc.get("code") == "confidence_report" and "scores" in qc:
+                conf_score = round(qc["scores"].get("overall_measurement_confidence", 85) / 100.0, 2)
+            elif qc.get("code") == "analysis_scope":
+                analysis_scope = qc.get("scope", "full_body")
+                limitations = qc.get("limitations", [])
+
     return {
         "analysis_id": str(analysis.id),
         "id": str(analysis.id),
         "report_id": report_id,
         "risk_level": risk_level,
-        "confidence_score": round(float(analysis.alignment_score or 85.0) / 100.0, 2),
-        "image_quality_score": 0.95,
+        "confidence_score": conf_score,
+        "image_quality_score": iq_score,
+        "analysis_scope": analysis_scope,
+        "limitations": limitations,
         "metrics": metrics_dict,
         "detected_problems": detected_problems,
         "findings": findings_text,
@@ -253,18 +295,32 @@ async def upload_analysis_legacy(
     request: Request,
     file: UploadFile = File(None),
     image: UploadFile = File(None),
+    side_file: UploadFile = File(None),
+    back_file: UploadFile = File(None),
     name: Annotated[str | None, Form()] = None,
     age: Annotated[str | None, Form()] = None,
     gender: Annotated[str | None, Form()] = None,
     height: Annotated[str | None, Form()] = None,
     weight: Annotated[str | None, Form()] = None,
     symptoms: Annotated[str | None, Form()] = None,
+    occupation: Annotated[str | None, Form()] = None,
+    preferred_language: Annotated[str | None, Form()] = None,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     upload = file or image
     if upload is None:
         raise RequestValidationError([{"loc": ["body", "file"], "msg": "Field required", "type": "missing"}])
+
+    if occupation or preferred_language:
+        from app.models.models import PatientProfile
+        prof = db.get(PatientProfile, user.id) or PatientProfile(user_id=user.id)
+        if occupation:
+            prof.occupation = occupation
+        if preferred_language:
+            prof.preferred_language = preferred_language
+        db.add(prof)
+        db.commit()
 
     settings = get_settings()
     upload_limiter.check(str(user.id))
@@ -305,7 +361,48 @@ async def upload_analysis_legacy(
             detail=analysis.failure_message or "Postural analysis could not identify body landmarks. Please upload a clear photo of standing posture.",
         )
 
-    return build_legacy_analysis_dict(analysis, db)
+    res_dict = build_legacy_analysis_dict(analysis, db)
+
+    # Multi-angle evaluation if additional views were provided
+    if side_file or back_file:
+        from io import BytesIO
+        from PIL import Image
+        from app.posture import cv_engine
+        from app.posture.fusion import fuse_posture_views
+
+        view_results = []
+        # Main upload result
+        with Image.open(BytesIO(raw)) as main_img:
+            main_res = cv_engine.analyze(main_img.convert("RGB"), allow_partial=True)
+            view_label = main_res.view.value if main_res.view else "front"
+            view_results.append((view_label, main_res))
+
+        if side_file:
+            side_raw = await read_limited(side_file, settings.max_upload_bytes)
+            with Image.open(BytesIO(side_raw)) as s_img:
+                s_res = cv_engine.analyze(s_img.convert("RGB"), allow_partial=True)
+                view_results.append(("side", s_res))
+
+        if back_file:
+            back_raw = await read_limited(back_file, settings.max_upload_bytes)
+            with Image.open(BytesIO(back_raw)) as b_img:
+                b_res = cv_engine.analyze(b_img.convert("RGB"), allow_partial=True)
+                view_results.append(("back", b_res))
+
+        multi_assessment = fuse_posture_views(view_results)
+        res_dict["multi_angle"] = {
+            "enabled": True,
+            "views_analyzed": multi_assessment.views_analyzed,
+            "fused_findings": [f.to_dict() for f in multi_assessment.fused_findings],
+            "inconsistencies": multi_assessment.inconsistencies,
+            "limitations": multi_assessment.limitations,
+            "overall_score": multi_assessment.overall_alignment_score,
+            "summary_message": multi_assessment.summary_message,
+        }
+    else:
+        res_dict["multi_angle"] = {"enabled": False}
+
+    return res_dict
 
 
 @router.get("/analysis/{analysis_id}")

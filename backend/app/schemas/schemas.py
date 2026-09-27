@@ -189,6 +189,42 @@ class ProgressOut(BaseModel):
     metric_labels: dict[str, str]
 
 
+class MetricDelta(BaseModel):
+    metric: str
+    label: str
+    baseline_value: float
+    current_value: float
+    delta: float
+    unit: str
+    change_description: str
+
+
+class ComparisonOut(BaseModel):
+    baseline_id: uuid.UUID
+    baseline_date: datetime
+    current_id: uuid.UUID
+    current_date: datetime
+    baseline_score: float | None
+    current_score: float | None
+    score_delta: float | None
+    deltas: list[MetricDelta]
+    summary_message: str
+
+
+class WeeklySummaryOut(BaseModel):
+    start_date: date
+    end_date: date
+    sessions_completed: int
+    sessions_planned: int
+    neck_discomfort_days: int
+    shoulder_discomfort_days: int
+    back_discomfort_days: int
+    primary_activity: str
+    alignment_trend: str
+    focus_areas: list[str]
+    summary_text: str
+
+
 # ---------------------------------------------------------------- providers, doctors, appointments
 
 

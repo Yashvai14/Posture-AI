@@ -81,7 +81,50 @@ export const analysisApi = {
       params: search ? { search } : {},
     });
     return res.data;
-  }
+  },
+  compare: async (baselineId: string, currentId: string) => {
+    const res = await api.get("/analyses/compare", {
+      params: { baseline_id: baselineId, current_id: currentId },
+    });
+    return res.data;
+  },
+  getWeeklySummary: async () => {
+    const res = await api.get("/analyses/weekly-summary");
+    return res.data;
+  },
+};
+
+export const programApi = {
+  getExercises: async () => {
+    const res = await api.get("/exercises");
+    return res.data;
+  },
+  getCheckins: async () => {
+    const res = await api.get("/checkins");
+    return res.data;
+  },
+  submitCheckin: async (data: {
+    neck_discomfort: number;
+    shoulder_discomfort: number;
+    back_discomfort: number;
+    exercises_completed: string;
+    notes?: string;
+  }) => {
+    const res = await api.post("/checkins", data);
+    return res.data;
+  },
+  getActiveProgram: async () => {
+    const res = await api.get("/programs/active");
+    return res.data;
+  },
+  generateProgram: async () => {
+    const res = await api.post("/programs/generate");
+    return res.data;
+  },
+  completeProgramDay: async (dayNumber: number) => {
+    const res = await api.post(`/programs/active/day/${dayNumber}/complete`);
+    return res.data;
+  },
 };
 
 export const doctorApi = {

@@ -1,17 +1,23 @@
 """Turns measurements into posture observations and an alignment score.
 
-IMPORTANT: the thresholds below are screening heuristics chosen for this product. They have NOT been
-clinically validated, they describe alignment patterns in a single photo, and they must never be
-presented as a diagnosis. Change PIPELINE_VERSION whenever a threshold or weight changes so stored
-results remain traceable.
+Uses rule-based thresholds from thresholds.py. Never allows LLM to override
+or hallucinate measurements.
 """
 
 import enum
 from dataclasses import asdict, dataclass
 
+from app.posture.confidence import calculate_finding_confidence
 from app.posture.metrics import Measurement
+from app.posture.thresholds import (
+    MIN_METRICS_FOR_SCORE,
+    PENALTY_START_FRACTION,
+    POSTURE_THRESHOLDS,
+    SCORE_WEIGHTS,
+    PostureThreshold,
+)
 
-PIPELINE_VERSION = "2.0.0"
+PIPELINE_VERSION = "2.1.0"
 
 
 class Severity(enum.StrEnum):
@@ -29,7 +35,7 @@ class Rule:
     mild: float
     moderate: float
     pronounced: float
-    observation: str  # formatted with {value} and measurement details
+    observation: str
 
     def excess(self, value: float) -> float:
         if self.direction == 0:
@@ -47,102 +53,20 @@ class Rule:
         return None
 
 
-RULES: tuple[Rule, ...] = (
+# Backward-compatible tuple of Rule objects built from POSTURE_THRESHOLDS
+RULES: tuple[Rule, ...] = tuple(
     Rule(
-        "forward_head",
-        "Forward head position",
-        "head_forward_angle",
-        +1,
-        15,
-        25,
-        35,
-        "The ear sits {value:.0f}° forward of the vertical line through the shoulder.",
-    ),
-    Rule(
-        "trunk_forward_lean",
-        "Forward trunk lean",
-        "trunk_inclination",
-        +1,
-        6,
-        10,
-        15,
-        "The trunk leans {value:.0f}° forward of vertical.",
-    ),
-    Rule(
-        "trunk_backward_lean",
-        "Backward trunk lean",
-        "trunk_inclination",
-        -1,
-        6,
-        10,
-        15,
-        "The trunk leans {value:.0f}° backward of vertical.",
-    ),
-    Rule(
-        "hips_forward",
-        "Hips forward of the shoulder–ankle line",
-        "hip_line_deviation",
-        +1,
-        6,
-        10,
-        15,
-        "The hips sit {value:.0f}° forward of the line from shoulder to ankle.",
-    ),
-    Rule(
-        "uneven_shoulders",
-        "Uneven shoulder height",
-        "shoulder_tilt",
-        0,
-        2.5,
-        5,
-        8,
-        "The shoulder line is tilted {value:.1f}°, with the {higher_side} shoulder higher.",
-    ),
-    Rule(
-        "uneven_hips",
-        "Uneven hip height",
-        "hip_tilt",
-        0,
-        3,
-        5,
-        8,
-        "The hip line is tilted {value:.1f}°, with the {higher_side} hip higher.",
-    ),
-    Rule(
-        "head_tilt",
-        "Sideways head tilt",
-        "head_tilt",
-        0,
-        4,
-        8,
-        12,
-        "The line between the ears is tilted {value:.1f}°, with the {higher_side} ear higher.",
-    ),
-    Rule(
-        "lateral_trunk_lean",
-        "Sideways trunk lean",
-        "trunk_lateral_lean",
-        0,
-        3,
-        6,
-        10,
-        "The trunk leans {value:.1f}° toward the {toward}.",
-    ),
+        code=t.code,
+        title=t.title,
+        metric=t.metric,
+        direction=t.direction,
+        mild=t.mild,
+        moderate=t.moderate,
+        pronounced=t.pronounced,
+        observation=t.observation_template,
+    )
+    for t in POSTURE_THRESHOLDS
 )
-
-# Relative importance of each metric in the alignment score.
-SCORE_WEIGHTS = {
-    "head_forward_angle": 0.40,
-    "trunk_inclination": 0.30,
-    "hip_line_deviation": 0.30,
-    "shoulder_tilt": 0.30,
-    "hip_tilt": 0.25,
-    "head_tilt": 0.20,
-    "trunk_lateral_lean": 0.25,
-}
-# Penalties start at this fraction of the mild threshold so small improvements still show in trends.
-PENALTY_START_FRACTION = 0.6
-MIN_METRICS_FOR_SCORE = 2
 
 
 @dataclass(frozen=True)
@@ -156,12 +80,14 @@ class Finding:
     observation: str
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        data = asdict(self)
+        data["severity"] = self.severity.value
+        return data
 
 
 def classify(measurements: list[Measurement]) -> list[Finding]:
     by_metric = {m.metric: m for m in measurements}
-    findings = []
+    findings: list[Finding] = []
     for rule in RULES:
         measurement = by_metric.get(rule.metric)
         if measurement is None:
@@ -169,6 +95,14 @@ def classify(measurements: list[Measurement]) -> list[Finding]:
         severity = rule.severity(measurement.value)
         if severity is None:
             continue
+
+        f_conf = calculate_finding_confidence(
+            measurement_confidence=measurement.confidence,
+            measured_value=rule.excess(measurement.value),
+            mild_threshold=rule.mild,
+            moderate_threshold=rule.moderate,
+        )
+
         findings.append(
             Finding(
                 code=rule.code,
@@ -176,7 +110,7 @@ def classify(measurements: list[Measurement]) -> list[Finding]:
                 severity=severity,
                 metric=rule.metric,
                 value=measurement.value,
-                confidence=measurement.confidence,
+                confidence=f_conf,
                 observation=rule.observation.format(value=rule.excess(measurement.value), **measurement.details),
             )
         )
@@ -184,7 +118,7 @@ def classify(measurements: list[Measurement]) -> list[Finding]:
 
 
 def alignment_score(measurements: list[Measurement]) -> float | None:
-    """0–100, higher is better aligned. A product-specific summary of the measured angles — not a health score."""
+    """0–100, higher is better aligned. Normalises over the subset of visible metrics."""
     by_metric = {m.metric: m for m in measurements if m.metric in SCORE_WEIGHTS}
     if len(by_metric) < MIN_METRICS_FOR_SCORE:
         return None
@@ -199,4 +133,6 @@ def alignment_score(measurements: list[Measurement]) -> float | None:
         weight = SCORE_WEIGHTS[metric]
         total_weight += weight
         total_penalty += weight * penalty
+    if total_weight <= 0:
+        return None
     return round(100.0 * (1.0 - total_penalty / total_weight))

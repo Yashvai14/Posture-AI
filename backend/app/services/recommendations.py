@@ -38,7 +38,7 @@ LIBRARY: tuple[Exercise, ...] = (
         "mirror_check",
         "Mirror alignment check",
         "awareness",
-        ("uneven_shoulders", "uneven_hips", "head_tilt", "lateral_trunk_lean"),
+        ("uneven_shoulders", "shoulder_asymmetry", "uneven_hips", "head_tilt", "lateral_trunk_lean"),
         "Stand in front of a mirror with your weight on both feet. Notice whether your head, shoulders and hips look "
         "level, gently correct, and hold the position while breathing normally.",
         "1 minute",
@@ -49,7 +49,7 @@ LIBRARY: tuple[Exercise, ...] = (
         "chin_tucks",
         "Chin tucks",
         "mobility",
-        ("forward_head",),
+        ("forward_head", "neck_forward_lean"),
         "Sit or stand tall. Keeping your eyes level, gently glide your chin straight back as if making a double chin, "
         "hold, then relax.",
         "Hold 5 seconds, 10 repetitions",
@@ -60,7 +60,7 @@ LIBRARY: tuple[Exercise, ...] = (
         "seated_extension",
         "Seated upper-back extension",
         "mobility",
-        ("forward_head", "trunk_forward_lean"),
+        ("forward_head", "neck_forward_lean", "trunk_forward_lean"),
         "Sit on a chair whose backrest reaches your shoulder blades. Support your head with your hands and gently "
         "lean back over the backrest, then return to upright.",
         "8–10 slow repetitions",

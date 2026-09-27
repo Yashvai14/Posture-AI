@@ -19,6 +19,22 @@ CREDENTIALS_ERROR = HTTPException(
 
 def get_current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    db: Session = Depends(get_db),
+) -> User:
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        raise CREDENTIALS_ERROR
+    try:
+        user_id = decode_access_token(credentials.credentials)
+    except InvalidTokenError:
+        raise CREDENTIALS_ERROR from None
+    user = repo.get_user(db, user_id)
+    if user is None or not user.is_active:
+        raise CREDENTIALS_ERROR
+    return user
+
+
+def get_current_user_with_query_token(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
     token: str | None = None,
     db: Session = Depends(get_db),
 ) -> User:
@@ -38,3 +54,4 @@ def get_current_user(
     if user is None or not user.is_active:
         raise CREDENTIALS_ERROR
     return user
+

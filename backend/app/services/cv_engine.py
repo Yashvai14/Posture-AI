@@ -21,8 +21,8 @@ def get_detector() -> MediaPipePoseDetector:
         return _detector
 
 
-def analyze(image: Image.Image) -> PostureResult:
-    return analyze_image(np.asarray(image.convert("RGB")), get_detector())
+def analyze(image: Image.Image, allow_partial: bool = True) -> PostureResult:
+    return analyze_image(np.asarray(image.convert("RGB")), get_detector(), allow_partial=allow_partial)
 
 
 def shutdown() -> None:

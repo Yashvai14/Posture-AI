@@ -92,6 +92,7 @@ class ReportData:
     explanation_model: str | None
     plan: dict
     annotated_jpeg: bytes | None
+    quality_checks: list[dict] | None = None
 
 
 def _p(text: str | None, style: str = "body") -> Paragraph:
@@ -167,6 +168,7 @@ def build_report(data: ReportData) -> bytes:
 
     # Patient information
     story.append(Paragraph("Patient information", STYLES["h2"]))
+    occ_label = (s.get("occupation") or "Not specified").replace("_", " ").title()
     info = [
         [
             _p("Name", "cell_bold"),
@@ -177,14 +179,56 @@ def build_report(data: ReportData) -> bytes:
         [
             _p("Sex", "cell_bold"),
             _p(SEX_LABELS.get(s.get("sex") or "", "—"), "cell"),
+            _p("Occupation", "cell_bold"),
+            _p(occ_label, "cell"),
+        ],
+        [
             _p("Height / weight", "cell_bold"),
             _p(f"{_fmt_number(s.get('height_cm'), ' cm')} / {_fmt_number(s.get('weight_kg'), ' kg')}", "cell"),
+            _p("Symptoms", "cell_bold"),
+            _p(s.get("symptoms") or "None reported", "cell"),
         ],
-        [_p("Reported symptoms", "cell_bold"), _p(s.get("symptoms") or "None reported", "cell"), "", ""],
     ]
     info_table = _table(info, [32 * mm, 58 * mm, 32 * mm, content_width - 122 * mm], header=False, zebra=False)
-    info_table.setStyle(TableStyle([("SPAN", (1, 2), (3, 2)), ("BACKGROUND", (0, 0), (-1, -1), LIGHT)]))
+    info_table.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), LIGHT)]))
     story.append(info_table)
+
+    # Extract quality checks and scope
+    analysis_scope = "full_body"
+    limitations = []
+    iq_score = None
+    conf_score = None
+    if data.quality_checks:
+        for qc in data.quality_checks:
+            if qc.get("code") == "analysis_scope":
+                analysis_scope = qc.get("scope", "full_body")
+                limitations = qc.get("limitations", [])
+            elif qc.get("code") == "quality_scores" and "scores" in qc:
+                iq_score = qc["scores"].get("overall_quality")
+            elif qc.get("code") == "confidence_report" and "scores" in qc:
+                conf_score = qc["scores"].get("overall_measurement_confidence")
+
+    # Scope Notice if partial / upper body
+    if analysis_scope in ("upper_body", "seated_upper_body", "partial"):
+        scope_warning = [
+            Paragraph(
+                "<b>Notice: Partial-Body Assessment</b>",
+                ParagraphStyle("sw_title", parent=STYLES["body"], textColor=colors.HexColor("#0369A1"), fontName="DejaVu-Bold"),
+            ),
+            Paragraph(
+                "This assessment was limited to the visible upper body. Lower-body measurements were not available.",
+                ParagraphStyle("sw_body", parent=STYLES["body"], textColor=colors.HexColor("#0C4A6E")),
+            ),
+        ]
+        s_box = Table([[scope_warning]], colWidths=[content_width])
+        s_box.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F0F9FF")),
+            ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#0284C7")),
+            ("LEFTPADDING", (0, 0), (-1, -1), 8),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ]))
+        story += [Spacer(1, 4), KeepTogether(s_box), Spacer(1, 4)]
 
     # Summary + score + image
     story.append(Paragraph("Posture summary", STYLES["h2"]))
@@ -196,8 +240,13 @@ def build_report(data: ReportData) -> bytes:
             "A product-specific summary of the measured angles. Not a medical or health score.", STYLES["center_small"]
         ),
     ]
+    meta_lines = [
+        f"<b>Camera view:</b> {VIEW_LABELS.get(data.view, data.view)} · <b>Scope:</b> {analysis_scope.replace('_', ' ').title()}",
+    ]
+    if iq_score is not None and conf_score is not None:
+        meta_lines.append(f"<b>Image Quality:</b> {iq_score:.0f}% · <b>Measurement Confidence:</b> {conf_score:.0f}%")
     summary_cell = [
-        _p(f"Camera view: {VIEW_LABELS.get(data.view, data.view)}", "cell_bold"),
+        _p(" · ".join(meta_lines), "cell"),
         Spacer(1, 3),
         _p(data.explanation.get("summary"), "body"),
     ]

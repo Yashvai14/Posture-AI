@@ -1,4 +1,7 @@
-"""Draws the detected skeleton, reference lines and measured angles onto the photo."""
+"""Draws the detected skeleton, reference lines and measured angles onto the photo.
+
+Only draws landmarks and measurement overlays that are actually visible in the frame.
+"""
 
 import math
 from io import BytesIO
@@ -82,11 +85,16 @@ def annotate(image: Image.Image, result: PostureResult) -> bytes:
     canvas = _Canvas(image.convert("RGB").copy())
     pose = result.pose
 
+    # Draw visible skeleton segments only
     for a, b in SKELETON:
-        if min(pose[a].confidence, pose[b].confidence) >= MIN_DRAW_CONFIDENCE:
+        if (
+            pose[a].in_frame
+            and pose[b].in_frame
+            and min(pose[a].confidence, pose[b].confidence) >= MIN_DRAW_CONFIDENCE
+        ):
             canvas.line(pose[a].xy, pose[b].xy, SKELETON_COLOR)
     for index in {i for pair in SKELETON for i in pair}:
-        if pose[index].confidence >= MIN_DRAW_CONFIDENCE:
+        if pose[index].in_frame and pose[index].confidence >= MIN_DRAW_CONFIDENCE:
             canvas.joint(pose[index].xy, SKELETON_COLOR)
 
     measured = {m.metric: m for m in result.measurements}
@@ -98,8 +106,10 @@ def annotate(image: Image.Image, result: PostureResult) -> bytes:
     offset = canvas.radius * 3
     if result.view.is_side:
         lm = side_landmarks(near_side(result.view))
-        ear, shoulder, hip, ankle = (pose[lm[k]].xy for k in ("ear", "shoulder", "hip", "ankle"))
-        if "head_forward_angle" in measured:
+        ear = pose[lm["ear"]].xy
+        shoulder = pose[lm["shoulder"]].xy
+
+        if "head_forward_angle" in measured and pose[lm["ear"]].in_frame and pose[lm["shoulder"]].in_frame:
             reach = math.dist(shoulder, ear) * 1.2
             canvas.dashed(shoulder, (shoulder[0], shoulder[1] - reach), REFERENCE_COLOR)
             canvas.line(shoulder, ear, color("head_forward_angle"))
@@ -108,7 +118,8 @@ def annotate(image: Image.Image, result: PostureResult) -> bytes:
                 f"Head {measured['head_forward_angle'].value:.0f}°",
                 color("head_forward_angle"),
             )
-        if "trunk_inclination" in measured:
+        if "trunk_inclination" in measured and pose[lm["hip"]].in_frame and pose[lm["shoulder"]].in_frame:
+            hip = pose[lm["hip"]].xy
             canvas.dashed(hip, (hip[0], shoulder[1]), REFERENCE_COLOR)
             canvas.line(hip, shoulder, color("trunk_inclination"))
             trunk_mid = midpoint(hip, shoulder)
@@ -117,7 +128,14 @@ def annotate(image: Image.Image, result: PostureResult) -> bytes:
                 f"Trunk {measured['trunk_inclination'].value:.0f}°",
                 color("trunk_inclination"),
             )
-        if "hip_line_deviation" in measured:
+        if (
+            "hip_line_deviation" in measured
+            and pose[lm["hip"]].in_frame
+            and pose[lm["shoulder"]].in_frame
+            and pose[lm["ankle"]].in_frame
+        ):
+            hip = pose[lm["hip"]].xy
+            ankle = pose[lm["ankle"]].xy
             canvas.dashed(shoulder, ankle, REFERENCE_COLOR)
             canvas.label(
                 (hip[0] + offset, hip[1] + offset * 2),
@@ -131,7 +149,7 @@ def annotate(image: Image.Image, result: PostureResult) -> bytes:
             ("hip_tilt", LM.LEFT_HIP, LM.RIGHT_HIP, "Hips"),
         )
         for metric, a, b, name in pairs:
-            if metric not in measured:
+            if metric not in measured or not (pose[a].in_frame and pose[b].in_frame):
                 continue
             pa, pb = pose[a].xy, pose[b].xy
             mid = midpoint(pa, pb)
@@ -139,7 +157,14 @@ def annotate(image: Image.Image, result: PostureResult) -> bytes:
             canvas.dashed((mid[0] - half, mid[1]), (mid[0] + half, mid[1]), REFERENCE_COLOR)
             canvas.line(pa, pb, color(metric))
             canvas.label((max(pa[0], pb[0]) + offset, mid[1]), f"{name} {measured[metric].value:.1f}°", color(metric))
-        if "trunk_lateral_lean" in measured:
+
+        if (
+            "trunk_lateral_lean" in measured
+            and pose[LM.LEFT_SHOULDER].in_frame
+            and pose[LM.RIGHT_SHOULDER].in_frame
+            and pose[LM.LEFT_HIP].in_frame
+            and pose[LM.RIGHT_HIP].in_frame
+        ):
             mid_sh = midpoint(pose[LM.LEFT_SHOULDER].xy, pose[LM.RIGHT_SHOULDER].xy)
             mid_hip = midpoint(pose[LM.LEFT_HIP].xy, pose[LM.RIGHT_HIP].xy)
             canvas.dashed(mid_hip, (mid_hip[0], mid_sh[1]), REFERENCE_COLOR)
@@ -150,6 +175,10 @@ def annotate(image: Image.Image, result: PostureResult) -> bytes:
                 f"Trunk {measured['trunk_lateral_lean'].value:.1f}°",
                 color("trunk_lateral_lean"),
             )
+
+    # Scope indicator tag
+    scope_text = f"Scope: {result.analysis_scope.replace('_', ' ').title()}"
+    canvas.label((canvas.radius * 2, canvas.radius * 2), scope_text, (30, 41, 59, 255))
 
     buffer = BytesIO()
     canvas.image.save(buffer, format="JPEG", quality=90)

@@ -12,7 +12,7 @@ from app.core.errors import DomainError
 from app.core.logging import configure_logging
 from app.db.init_db import check_database_ready
 from app.db.session import engine
-from app.routers import analysis, appointments, auth, doctors, patients, reports
+from app.routers import analysis, appointments, auth, doctors, patients, programs, reports
 from app.services import analysis_service, cv_engine
 from app.services.jobs import shutdown_job_runner
 from app.services.storage import get_storage
@@ -91,7 +91,15 @@ def create_app() -> FastAPI:
             connection.execute(text("SELECT 1"))
         return {"status": "ok", "pose_model_present": settings.POSE_MODEL_PATH.is_file()}
 
-    for router in (auth.router, patients.router, analysis.router, reports.router, doctors.router, appointments.router):
+    for router in (
+        auth.router,
+        patients.router,
+        analysis.router,
+        reports.router,
+        doctors.router,
+        appointments.router,
+        programs.router,
+    ):
         app.include_router(router, prefix=settings.API_PREFIX)
     return app
 

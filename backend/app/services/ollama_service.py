@@ -62,6 +62,71 @@ ASSOCIATIONS = {
     "one side.",
     "lateral_trunk_lean": "A sideways lean of the trunk can reflect uneven weight-bearing or muscle imbalance, or just "
     "how you were standing at that moment.",
+    "neck_forward_lean": "Forward neck inclination reflects forward angling of the cervical spine relative to the torso, "
+    "frequently seen with looking down at handheld devices or laptop screens.",
+    "shoulder_asymmetry": "Shoulder asymmetry indicates a height disparity between shoulders, often linked with unilateral bag carrying or uneven arm dominance.",
+}
+
+# Occupation-specific ergonomics and workstation movement habits
+OCCUPATION_TIPS: dict[str, list[str]] = {
+    "software_developer": [
+        "Every 45–60 minutes: Stand up, take a 2-minute walk, perform shoulder rolls, and reset your screen distance.",
+        "Position monitor so the top third of the screen is at eye level, roughly an arm's length away.",
+        "Keep keyboard and mouse close to avoid reaching forward with your shoulders.",
+    ],
+    "driver": [
+        "Adjust vehicle backrest angle to roughly 100–110° with lumbar support supporting your lower back curve.",
+        "Hold the steering wheel with relaxed elbows rather than reaching forward with locked arms.",
+        "Perform gentle neck and thoracic extensions during refueling and rest stops.",
+    ],
+    "student": [
+        "Keep textbooks or laptop elevated on a riser or bookstand to prevent looking down for prolonged periods.",
+        "Wear backpack with both shoulder straps evenly tightened close to the upper back.",
+        "Take a 3-minute movement and postural reset break every study hour.",
+    ],
+    "gamer": [
+        "Align display directly in front of you at eye level to minimize cervical spine forward tilt.",
+        "Keep controller or keyboard positioned to allow elbows to rest comfortably near 90°.",
+        "Stand up between matches or gaming sessions to relieve hip flexor and lower back tension.",
+    ],
+    "manual_worker": [
+        "Bend at the hips and knees with feet shoulder-width apart when lifting from the floor.",
+        "Hold heavy loads close to your body's center of gravity to reduce spinal leverage load.",
+        "Incorporate mid-shift hamstring and spinal decompression stretches.",
+    ],
+    "office_worker": [
+        "Maintain hips and knees at approximately 90° with feet flat on the floor or footrest.",
+        "Set a recurring 45-minute timer to stand up and perform gentle scapular retractions.",
+        "Adjust armrests so shoulders remain relaxed without shrugging upward.",
+    ],
+}
+
+# Multilingual terminology pairs (English + localized explanation)
+MULTILINGUAL_LABELS: dict[str, dict[str, str]] = {
+    "hi": {
+        "forward_head": "Forward Head Posture (आगे की ओर सिर का झुकाव)",
+        "neck_forward_lean": "Neck Inclination (गर्दन का आगे की ओर झुकाव)",
+        "uneven_shoulders": "Uneven Shoulders (कंधों का असमान स्तर)",
+        "shoulder_asymmetry": "Shoulder Asymmetry (कंधों में असंतुलन)",
+        "uneven_hips": "Uneven Hips (कूल्हों का असमान स्तर)",
+        "head_tilt": "Head Tilt (सिर का एक तरफ झुकाव)",
+        "trunk_forward_lean": "Forward Trunk Lean (धड़ का आगे की ओर झुकाव)",
+        "trunk_backward_lean": "Backward Trunk Lean (धड़ का पीछे की ओर झुकाव)",
+        "hips_forward": "Swayback / Hips Forward (कूल्हों का आगे की ओर विस्थापन)",
+        "lateral_trunk_lean": "Lateral Trunk Lean (धड़ का एक तरफ झुकाव)",
+    },
+    "mr": {
+        "forward_head": "Forward Head Posture (पुढे झुकलेले डोके)",
+        "neck_forward_lean": "Neck Inclination (मानेचा पुढचा कल)",
+        "uneven_shoulders": "Uneven Shoulders (खांद्यांमधील असमतोल)",
+        "shoulder_asymmetry": "Shoulder Asymmetry (खांद्याची असमान पातळी)",
+        "uneven_hips": "Uneven Hips (कमरेची असमान पातळी)",
+        "head_tilt": "Head Tilt (डोक्याचा बाजूला कल)",
+        "trunk_forward_lean": "Forward Trunk Lean (धडाचा पुढचा कल)",
+        "trunk_backward_lean": "Backward Trunk Lean (धडाचा पाठीमागे कल)",
+        "hips_forward": "Swayback / Hips Forward (कमरेचा पुढचा भाग पुढे येणे)",
+        "lateral_trunk_lean": "Lateral Trunk Lean (धडाचा एका बाजूला झुकणे)",
+    },
 }
 
 # Named conditions a photo-based screening must never assert or discuss.
@@ -203,6 +268,8 @@ def explain(
     findings: list[dict],
     score: float | None,
     plan: dict,
+    occupation: str | None = None,
+    language: str = "en",
     transport: httpx.BaseTransport | None = None,
 ) -> ExplanationResult:
     """Never raises: returns a validated Ollama explanation or the deterministic fallback."""
@@ -210,12 +277,20 @@ def explain(
     finding_codes = {f["code"] for f in findings}
     measured_values = [m["value"] for m in measurements]
     fallback = lambda reason: ExplanationResult(  # noqa: E731
-        fallback_explanation(view, measurements, findings, plan), "rule_based", None, reason
+        fallback_explanation(view, measurements, findings, plan, occupation=occupation, language=language),
+        "rule_based",
+        None,
+        reason,
     )
     if not settings.OLLAMA_ENABLED:
         return fallback("Ollama is disabled")
 
     facts = _facts(snapshot, view, measurements, findings, score, plan)
+    if occupation:
+        facts["occupation"] = occupation
+    if language:
+        facts["response_language"] = language
+
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": "Explain these screening results.\n" + json.dumps(facts, ensure_ascii=False)},
@@ -245,7 +320,14 @@ def explain(
     return fallback(f"Ollama response rejected: {reason}")
 
 
-def fallback_explanation(view: str, measurements: list[dict], findings: list[dict], plan: dict) -> AIExplanation:
+def fallback_explanation(
+    view: str,
+    measurements: list[dict],
+    findings: list[dict],
+    plan: dict,
+    occupation: str | None = None,
+    language: str = "en",
+) -> AIExplanation:
     view_text = "side" if "side" in view else view
     count = len(measurements)
     if findings:
@@ -268,18 +350,30 @@ def fallback_explanation(view: str, measurements: list[dict], findings: list[dic
         " This screening describes how you were standing in one photo; it cannot tell whether any underlying "
         "medical condition is present."
     )
+
+    finding_exps = []
+    lang_dict = MULTILINGUAL_LABELS.get(language, {})
+    for f in findings:
+        localized_tag = f" [{lang_dict[f['code']]}]" if f["code"] in lang_dict else ""
+        desc = f"{f['observation']}{localized_tag} {ASSOCIATIONS.get(f['code'], '')}".strip()
+        finding_exps.append(FindingExplanation(code=f["code"], explanation=desc))
+
+    # Incorporate occupation tips if available
+    lifestyle: list[str] = []
+    if occupation and occupation.lower() in OCCUPATION_TIPS:
+        lifestyle.extend(OCCUPATION_TIPS[occupation.lower()])
+    if plan.get("workstation"):
+        for item in plan["workstation"]:
+            if item not in lifestyle and len(lifestyle) < 4:
+                lifestyle.append(item)
+    if not lifestyle:
+        lifestyle = ["Take regular movement breaks during long periods of sitting."]
+
     return AIExplanation(
         summary=summary,
         what_this_may_mean=meaning,
-        finding_explanations=[
-            FindingExplanation(
-                code=f["code"], explanation=f"{f['observation']} {ASSOCIATIONS.get(f['code'], '')}".strip()
-            )
-            for f in findings
-        ],
-        lifestyle_tips=(plan.get("workstation") or ["Take regular movement breaks during long periods of sitting."])[
-            :4
-        ],
+        finding_explanations=finding_exps,
+        lifestyle_tips=lifestyle[:4],
         follow_up_guidance=(
             "Follow the 4-week plan and repeat the analysis with a photo taken the same way (same view, distance and "
             "clothing) to compare results. If pain persists or you notice any warning signs, consult a healthcare "
