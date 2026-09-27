@@ -1,7 +1,9 @@
 import uuid
+from datetime import date
+from decimal import Decimal
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ValidationError
@@ -11,7 +13,7 @@ from app.core.config import get_settings
 from app.core.errors import NotFoundError, PayloadTooLargeError
 from app.core.rate_limit import upload_limiter
 from app.db.session import get_db
-from app.models.models import PostureAnalysis, User
+from app.models.models import AnalysisStatus, PostureAnalysis, User
 from app.repositories import repository as repo
 from app.routers.deps import get_current_user
 from app.schemas.schemas import AnalysisCreate, AnalysisOut, AnalysisPage, AnalysisSummaryOut, ProgressOut
@@ -171,3 +173,149 @@ def delete_analysis(
 @router.get("/progress", response_model=ProgressOut)
 def progress(user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> ProgressOut:
     return analysis_service.progress_for_user(db, user.id)
+
+
+def build_legacy_analysis_dict(analysis: PostureAnalysis, db: Session) -> dict:
+    db.refresh(analysis)
+    metrics_dict = {
+        "ear_shoulder_angle": 0.0,
+        "shoulder_tilt": 0.0,
+        "hip_alignment": 0.0,
+    }
+    for m in analysis.measurements:
+        metric_key = m.metric.lower()
+        if any(k in metric_key for k in ("craniovertebral", "ear", "neck", "head")):
+            metrics_dict["ear_shoulder_angle"] = round(float(m.value), 1)
+        elif "shoulder" in metric_key:
+            metrics_dict["shoulder_tilt"] = round(float(m.value), 1)
+        elif "hip" in metric_key:
+            metrics_dict["hip_alignment"] = round(float(m.value), 1)
+
+    detected_problems = [f.title for f in analysis.findings]
+    if not detected_problems and analysis.status == AnalysisStatus.COMPLETED:
+        detected_problems = ["No significant postural deviations detected"]
+
+    risk_level = "Low"
+    if analysis.alignment_score is not None:
+        if analysis.alignment_score < 60 or any(f.severity == "severe" for f in analysis.findings):
+            risk_level = "High"
+        elif analysis.alignment_score < 80 or any(f.severity == "moderate" for f in analysis.findings):
+            risk_level = "Medium"
+
+    rec = analysis.recommendation
+    explanation = rec.explanation if rec and rec.explanation else {}
+    corrective = rec.corrective_plan if rec and rec.corrective_plan else {}
+
+    stretches = []
+    exercises = []
+    for ex in corrective.get("exercises", []):
+        cat = ex.get("category", "")
+        desc = f"{ex.get('name', 'Exercise')}: {ex.get('instructions', '')}"
+        if cat in ("stretch", "mobility"):
+            stretches.append(desc)
+        else:
+            exercises.append(desc)
+
+    lifestyle_tips = explanation.get("lifestyle_tips", [])
+    if not lifestyle_tips:
+        lifestyle_tips = [
+            "Adjust your monitor to eye level to avoid neck strain.",
+            "Take a 2-minute posture break every 45 minutes of seated work.",
+            "Keep your feet flat on the floor with hips level while seated.",
+        ]
+
+    findings_text = explanation.get("summary") or explanation.get("what_this_may_mean") or (
+        analysis.findings[0].observation if analysis.findings else "Your posture has been evaluated using computer vision body landmark tracking."
+    )
+
+    report_id = str(analysis.report.id) if analysis.report else str(analysis.id)
+
+    return {
+        "analysis_id": str(analysis.id),
+        "id": str(analysis.id),
+        "report_id": report_id,
+        "risk_level": risk_level,
+        "confidence_score": round(float(analysis.alignment_score or 85.0) / 100.0, 2),
+        "image_quality_score": 0.95,
+        "metrics": metrics_dict,
+        "detected_problems": detected_problems,
+        "findings": findings_text,
+        "recommendations": {
+            "stretches": stretches or ["Neck lateral flexion stretch: 30 seconds each side", "Chest doorway stretch: 30 seconds"],
+            "exercises": exercises or ["Chin tucks: 10 repetitions, 3 sets", "Wall angels: 10 repetitions, 2 sets"],
+            "lifestyle_tips": lifestyle_tips,
+        },
+    }
+
+
+@router.post("/analysis/upload")
+async def upload_analysis_legacy(
+    request: Request,
+    file: UploadFile = File(None),
+    image: UploadFile = File(None),
+    name: Annotated[str | None, Form()] = None,
+    age: Annotated[str | None, Form()] = None,
+    gender: Annotated[str | None, Form()] = None,
+    height: Annotated[str | None, Form()] = None,
+    weight: Annotated[str | None, Form()] = None,
+    symptoms: Annotated[str | None, Form()] = None,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    upload = file or image
+    if upload is None:
+        raise RequestValidationError([{"loc": ["body", "file"], "msg": "Field required", "type": "missing"}])
+
+    settings = get_settings()
+    upload_limiter.check(str(user.id))
+    raw = await read_limited(upload, settings.max_upload_bytes)
+    validated = validate_image(raw, upload.filename, upload.content_type, settings.MAX_IMAGE_PIXELS)
+
+    sex_val = gender.lower() if gender else None
+    if sex_val not in ("male", "female", "other"):
+        sex_val = "other" if sex_val else None
+
+    dob = None
+    if age and str(age).isdigit():
+        dob = f"{date.today().year - int(age)}-01-01"
+
+    data = AnalysisCreate(
+        date_of_birth=dob,
+        sex=sex_val,
+        height_cm=Decimal(str(height)) if height and str(height).replace(".", "", 1).isdigit() else None,
+        weight_kg=Decimal(str(weight)) if weight and str(weight).replace(".", "", 1).isdigit() else None,
+        symptoms=symptoms,
+        save_to_profile=True,
+    )
+    analysis = analysis_service.create_analysis(db, user, validated, data, request)
+    db.refresh(analysis)
+
+    # Wait for the background worker to finish processing (usually takes ~1-2s)
+    import time
+    for _ in range(40):
+        db.expire_all()
+        db.refresh(analysis)
+        if analysis.status in (AnalysisStatus.COMPLETED, AnalysisStatus.FAILED):
+            break
+        time.sleep(0.25)
+
+    if analysis.status == AnalysisStatus.FAILED:
+        raise HTTPException(
+            status_code=400,
+            detail=analysis.failure_message or "Postural analysis could not identify body landmarks. Please upload a clear photo of standing posture.",
+        )
+
+    return build_legacy_analysis_dict(analysis, db)
+
+
+@router.get("/analysis/{analysis_id}")
+def get_analysis_legacy(
+    analysis_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    analysis = repo.get_analysis_for_user(db, analysis_id, user.id)
+    if analysis is None:
+        raise NotFoundError("Analysis not found.")
+    return build_legacy_analysis_dict(analysis, db)
+

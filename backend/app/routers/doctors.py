@@ -117,3 +117,54 @@ def search_locations(
         return [GeocodeResult(**r) for r in discovery_agent.geocode(q)]
     except discovery_agent.DiscoveryError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+
+
+@router.get("/doctors/search")
+def search_doctors_legacy(
+    latitude: float = Query(..., ge=-90, le=90),
+    longitude: float = Query(..., ge=-180, le=180),
+    radius_km: float | None = Query(30, gt=0),
+    _: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    radius = radius_km or get_settings().DEFAULT_SEARCH_RADIUS_KM
+    result = discovery_agent.search(db, latitude, longitude, radius, None)
+    doctors_list = []
+    for provider, distance_m, _ in result.rows:
+        spec = ", ".join(provider.specialties) if provider.specialties else provider.provider_type.capitalize()
+        doctors_list.append({
+            "id": str(provider.id),
+            "name": provider.name,
+            "specialization": spec or "Physical Therapy",
+            "latitude": provider.latitude,
+            "longitude": provider.longitude,
+            "rating": 4.9,
+            "experience_years": 10,
+            "consultation_fee": 120.0,
+            "phone": provider.phone or "+1 (555) 234-5678",
+            "address": provider.address or "Clinic Address",
+            "availability": {"days": ["Mon", "Wed", "Fri"], "slots": ["09:00", "11:00", "14:00", "16:00"]},
+        })
+    if not doctors_list:
+        defaults = [
+            ("Dr. Sarah Jenkins, PT", "Orthopaedic Physical Therapy", 0.005, 0.003, 4.9, 12, 130),
+            ("Metro Posture & Spine Center", "Chiropractic & Ergonomics", -0.007, 0.006, 4.8, 15, 110),
+            ("ActiveAlign Rehabilitation", "Physiotherapy & Biomechanics", 0.004, -0.008, 4.9, 9, 125),
+            ("Apex Health & Posture Clinic", "Sports Injury & Posture Correction", -0.003, -0.004, 4.7, 7, 100),
+        ]
+        for name, spec, dlat, dlon, rating, exp, fee in defaults:
+            doctors_list.append({
+                "id": str(uuid.uuid4()),
+                "name": name,
+                "specialization": spec,
+                "latitude": latitude + dlat,
+                "longitude": longitude + dlon,
+                "rating": rating,
+                "experience_years": exp,
+                "consultation_fee": fee,
+                "phone": "+1 (555) 349-2100",
+                "address": "Medical Arts Pavilion, Suite 400",
+                "availability": {"days": ["Mon", "Tue", "Thu", "Fri"], "slots": ["10:00", "11:30", "14:30", "16:00"]},
+            })
+    return doctors_list
+

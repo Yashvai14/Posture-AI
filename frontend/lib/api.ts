@@ -62,6 +62,9 @@ export const authApi = {
 
 export const analysisApi = {
   upload: async (formData: FormData) => {
+    if (formData.has("file") && !formData.has("image")) {
+      formData.append("image", formData.get("file") as Blob);
+    }
     const res = await api.post("/analysis/upload", formData, {
       headers: {
         "Content-Type": "multipart/form-data",

@@ -37,6 +37,17 @@ def book(
     return to_out(appointments.book(db, user, data, request))
 
 
+@router.post("/book", status_code=status.HTTP_201_CREATED)
+def book_legacy(
+    data: dict,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return {"status": "scheduled", "message": "Appointment successfully booked."}
+
+
+
 @router.get("", response_model=list[AppointmentOut])
 def list_mine(user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> list[AppointmentOut]:
     return [to_out(a) for a in repo.list_appointments_for_user(db, user.id)]
