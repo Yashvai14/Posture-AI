@@ -72,12 +72,15 @@ The background discovery agent ([discovery_agent.py](backend/app/services/discov
 ## 🚀 Running the Project
 
 ### Option A: Using Docker (Recommended)
+> 📖 **New to Docker?** See the step-by-step beginner guide in [DOCKER_STARTUP.md](DOCKER_STARTUP.md).
+
 Run the entire stack (PostGIS Database + FastAPI Backend + Next.js Frontend) with a single command:
 ```bash
 docker compose up --build
 ```
 - **Frontend**: [http://localhost:3000](http://localhost:3000)
 - **Backend API**: [http://localhost:8001/api](http://localhost:8001/api) (Swagger Docs: [http://localhost:8001/api/docs](http://localhost:8001/api/docs))
+- **Health Check**: [http://localhost:8001/api/health](http://localhost:8001/api/health)
 
 ---
 
